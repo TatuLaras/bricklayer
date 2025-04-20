@@ -1,0 +1,3 @@
+CompileFlags:
+  Add: [-I../external/include, -xc, -Wall, -DDEBUG, -Wextra, -Wshadow, -pedantic, -Wno-c23-extensions]
+
