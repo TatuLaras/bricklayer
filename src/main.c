@@ -102,9 +102,17 @@ get_most_recent_file_modification(StringVector *model_filepaths) {
 
 int main(int argc, char **argv) {
     StringVector model_filepaths = stringvec_init();
+    int grid_enabled = 1;
+    Vector3 camera_arm = {0.0f, 0.0f, 3.0f};
 
     for (int i = 1; i < argc; i++) {
         // CLI args..
+
+        if (!strcmp(argv[i], "-skybox")) {
+            grid_enabled = 0;
+            camera_arm.z = 0;
+            continue;
+        }
 
         if (*argv[i] == '-') {
             fprintf(stderr, "Unsupported command-line option \"%s\"", argv[i]);
@@ -112,25 +120,6 @@ int main(int argc, char **argv) {
         }
 
         stringvec_append(&model_filepaths, argv[i], strlen(argv[i]));
-    }
-
-    // Alternatively read model filepaths from stdin
-    if (!stringvec_count(&model_filepaths)) {
-        char input[1000] = {0};
-        size_t input_used = 0;
-        while (!feof(stdin)) {
-            char read_char = 0;
-            fread(&read_char, 1, 1, stdin);
-            if (read_char == ' ') {
-                stringvec_append(&model_filepaths, input, input_used);
-                input_used = 0;
-            } else {
-                input[input_used++] = read_char;
-            }
-        }
-
-        if (input_used > 0)
-            stringvec_append(&model_filepaths, input, input_used - 1);
     }
 
     if (!stringvec_count(&model_filepaths)) {
@@ -145,7 +134,6 @@ int main(int argc, char **argv) {
     uint64_t last_modified =
         get_most_recent_file_modification(&model_filepaths);
 
-    Vector3 camera_arm = {0.0f, 0.0f, 3.0f};
     Camera3D camera = {0};
     camera.position = camera_arm;
     camera.target = (Vector3){0.0f, 0.0f, 0.0f};
@@ -157,7 +145,6 @@ int main(int argc, char **argv) {
     float yaw = 0;
     float pitch = -PI / 8;
     Vector3 model_position = {0};
-    int grid_enabled = 1;
     int wireframe_enabled = 0;
     int auto_rotate = 0;
     float time_since_last_modified_check = 0;
@@ -190,11 +177,11 @@ int main(int argc, char **argv) {
 
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
             if (IsKeyDown(KEY_X))
-                model_position.x -= mouse_delta.y * MODEL_SHIFT_SENSITIVITY;
+                model_position.x -= mouse_delta.x * MODEL_SHIFT_SENSITIVITY;
             else if (IsKeyDown(KEY_Z))
-                model_position.z -= mouse_delta.y * MODEL_SHIFT_SENSITIVITY;
+                model_position.z -= mouse_delta.x * MODEL_SHIFT_SENSITIVITY;
             else
-                model_position.y -= mouse_delta.y * MODEL_SHIFT_SENSITIVITY;
+                model_position.y -= mouse_delta.x * MODEL_SHIFT_SENSITIVITY;
         }
 
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
@@ -234,8 +221,11 @@ int main(int argc, char **argv) {
         // ----- Drawing -----
 
         BeginDrawing();
-        Color col = {.r = 0};
-        ClearBackground(col);
+
+        if (IsWindowFocused())
+            ClearBackground((Color){0x48, 0x48, 0x48, 0xff});
+        else
+            ClearBackground(BLACK);
 
         BeginMode3D(camera);
 
