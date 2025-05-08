@@ -1,5 +1,6 @@
 #include "aseprite_texture.h"
 #include "model_vector.h"
+#include "orbital_controls.h"
 #include "path.h"
 #include "raylib.h"
 #include "raymath.h"
@@ -103,14 +104,10 @@ get_most_recent_file_modification(StringVector *model_filepaths) {
 int main(int argc, char **argv) {
     StringVector model_filepaths = stringvec_init();
     int grid_enabled = 1;
-    Vector3 camera_arm = {0.0f, 0.0f, 3.0f};
 
     for (int i = 1; i < argc; i++) {
-        // CLI args..
-
         if (!strcmp(argv[i], "-skybox")) {
             grid_enabled = 0;
-            camera_arm.z = 0;
             continue;
         }
 
@@ -134,24 +131,21 @@ int main(int argc, char **argv) {
     uint64_t last_modified =
         get_most_recent_file_modification(&model_filepaths);
 
-    Camera3D camera = {0};
-    camera.position = camera_arm;
-    camera.target = (Vector3){0.0f, 0.0f, 0.0f};
-    camera.up = (Vector3){0.0f, 1.0f, 0.0f};
-    camera.fovy = 45.0f;
+    Camera starting_camera = {
+        .position = (Vector3){0.0f, 1.0f, 3.0f},
+        .target = (Vector3){0.0f, 0.0f, 0.0f},
+        .up = (Vector3){0.0f, 1.0f, 0.0f},
+        .fovy = 45.0,
+    };
+    Camera camera = starting_camera;
 
     ModelVector models = load_model_data_from_files(&model_filepaths);
 
-    float yaw = 0;
-    float pitch = -PI / 8;
-    Vector3 model_position = {0};
     int wireframe_enabled = 0;
-    int auto_rotate = 0;
     float time_since_last_modified_check = 0;
 
     while (!WindowShouldClose()) {
         time_since_last_modified_check += GetFrameTime();
-        Vector2 mouse_delta = GetMouseDelta();
 
         // Modified check if needed
         if (time_since_last_modified_check > MODIFIED_CHECK_COOLDOWN_SECONDS) {
@@ -168,55 +162,21 @@ int main(int argc, char **argv) {
             }
         }
 
+        if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE))
+            DisableCursor();
+        if (IsMouseButtonReleased(MOUSE_BUTTON_MIDDLE))
+            EnableCursor();
         if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
-            yaw -= mouse_delta.x * DRAG_ROTATE_SENSITIVITY_X;
-            pitch -= mouse_delta.y * DRAG_ROTATE_SENSITIVITY_Y;
+            orbital_camera_update(&camera);
         }
-        if (auto_rotate)
-            yaw += AUTO_ROTATE_SPEED * GetFrameTime();
-
-        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
-            if (IsKeyDown(KEY_X))
-                model_position.x -= mouse_delta.x * MODEL_SHIFT_SENSITIVITY;
-            else if (IsKeyDown(KEY_Z))
-                model_position.z -= mouse_delta.x * MODEL_SHIFT_SENSITIVITY;
-            else
-                model_position.y -= mouse_delta.x * MODEL_SHIFT_SENSITIVITY;
-        }
-
-        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
-            camera_arm.z +=
-                (mouse_delta.y * camera_arm.z) * ZOOM_SENSITIVITY_MOUSE;
-        }
-
-        camera_arm.z -=
-            (GetMouseWheelMove() * camera_arm.z) * ZOOM_SENSITIVITY_SCROLL;
+        orbital_adjust_camera_zoom(&camera, GetMouseWheelMove());
 
         if (IsKeyPressed(KEY_G))
             grid_enabled = !grid_enabled;
         if (IsKeyPressed(KEY_W))
             wireframe_enabled = !wireframe_enabled;
-        if (IsKeyPressed(KEY_R))
-            auto_rotate = !auto_rotate;
         if (IsKeyPressed(KEY_B))
-            model_position = Vector3Zero();
-
-        // Clamp values
-        if (yaw > 2 * PI)
-            yaw = 0;
-        if (pitch > 2 * PI)
-            pitch = 0;
-        if (camera_arm.z < 0.04f)
-            camera_arm.z = 0.04f;
-
-        // Calculate camera position
-        Vector3 yawed_camera_arm = Vector3RotateByAxisAngle(
-            camera_arm, (Vector3){0.0f, 1.0f, 0.0f}, yaw);
-        Vector3 pitch_axis = Vector3RotateByAxisAngle(
-            (Vector3){1.0f, 0.0f, 0.0f}, (Vector3){0.0f, 1.0f, 0.0f}, yaw);
-        Vector3 pitched_camera_arm =
-            Vector3RotateByAxisAngle(yawed_camera_arm, pitch_axis, pitch);
-        camera.position = Vector3Add(camera.target, pitched_camera_arm);
+            camera = starting_camera;
 
         // ----- Drawing -----
 
@@ -234,9 +194,9 @@ int main(int argc, char **argv) {
             Model *model = modelvec_get(&models, i++);
             if (!model)
                 break;
-            DrawModel(*model, model_position, 1.0f, RAYWHITE);
+            DrawModel(*model, Vector3Zero(), 1.0f, RAYWHITE);
             if (wireframe_enabled)
-                DrawModelWires(*model, model_position, 1.0f, BLACK);
+                DrawModelWires(*model, Vector3Zero(), 1.0f, BLACK);
         }
 
         if (grid_enabled)
