@@ -49,14 +49,14 @@ static ModelVector load_model_data_from_files(StringVector *model_filepaths) {
         char *model_filepath = stringvec_get(model_filepaths, i++);
         if (!model_filepath)
             break;
-        Model model = LoadModel(model_filepath);
+        ModelData model_data = {.model = LoadModel(model_filepath)};
 
         char *texture_filepath =
             path_get_corresponding_texture_file(model_filepath);
-        try_load_corresponding_texture(texture_filepath, &model);
+        try_load_corresponding_texture(texture_filepath, &model_data.model);
         free(texture_filepath);
 
-        modelvec_append(&vec, model);
+        modelvec_append(&vec, model_data);
     }
     return vec;
 }
@@ -191,12 +191,12 @@ int main(int argc, char **argv) {
 
         size_t i = 0;
         while (1) {
-            Model *model = modelvec_get(&models, i++);
+            ModelData *model = modelvec_get(&models, i++);
             if (!model)
                 break;
-            DrawModel(*model, Vector3Zero(), 1.0f, RAYWHITE);
+            DrawModel(model->model, Vector3Zero(), 1.0f, RAYWHITE);
             if (wireframe_enabled)
-                DrawModelWires(*model, Vector3Zero(), 1.0f, BLACK);
+                DrawModelWires(model->model, Vector3Zero(), 1.0f, BLACK);
         }
 
         if (grid_enabled)
