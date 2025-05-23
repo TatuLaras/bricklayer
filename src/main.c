@@ -23,6 +23,22 @@
 #define MODEL_SHIFT_SENSITIVITY 0.004
 #define MODIFIED_CHECK_COOLDOWN_SECONDS 0.5
 
+// Default shader with vertex colors disabled
+static const char *vertex_shader =
+    "#version 330                       \n"
+    "in vec3 vertexPosition;            \n"
+    "in vec2 vertexTexCoord;            \n"
+    "in vec4 vertexColor;               \n"
+    "out vec2 fragTexCoord;             \n"
+    "out vec4 fragColor;                \n"
+    "uniform mat4 mvp;                  \n"
+    "void main()                        \n"
+    "{                                  \n"
+    "    fragTexCoord = vertexTexCoord; \n"
+    "    fragColor = vec4(1.0);         \n"
+    "    gl_Position = mvp*vec4(vertexPosition, 1.0); \n"
+    "}                                  \n";
+
 // Tries to load a texture from aseprite file at `filepath` and applies it
 // to `model` mesh at index 0 on success.
 static void try_load_corresponding_texture(const char *filepath, Model *model) {
@@ -41,7 +57,8 @@ static void try_load_corresponding_texture(const char *filepath, Model *model) {
 
 // Loads model data from `model_filepaths` supplied and possible aseprite
 // texture files of the same name.
-static ModelVector load_model_data_from_files(StringVector *model_filepaths) {
+static ModelVector load_model_data_from_files(StringVector *model_filepaths,
+                                              Shader *shader) {
     ModelVector vec = modelvec_init();
 
     size_t i = 0;
@@ -57,6 +74,7 @@ static ModelVector load_model_data_from_files(StringVector *model_filepaths) {
         free(texture_filepath);
 
         modelvec_append(&vec, model_data);
+        model_data.model.materials[0].shader = *shader;
     }
     return vec;
 }
@@ -128,6 +146,8 @@ int main(int argc, char **argv) {
     InitWindow(800, 450, "Bricklayer");
     SetTargetFPS(60);
 
+    Shader shader = LoadShaderFromMemory(vertex_shader, 0);
+
     uint64_t last_modified =
         get_most_recent_file_modification(&model_filepaths);
 
@@ -139,7 +159,7 @@ int main(int argc, char **argv) {
     };
     Camera camera = starting_camera;
 
-    ModelVector models = load_model_data_from_files(&model_filepaths);
+    ModelVector models = load_model_data_from_files(&model_filepaths, &shader);
 
     int wireframe_enabled = 0;
     float time_since_last_modified_check = 0;
@@ -157,7 +177,7 @@ int main(int argc, char **argv) {
             // Reload model if needed
             if (new_last_modified > last_modified) {
                 modelvec_free(&models);
-                models = load_model_data_from_files(&model_filepaths);
+                models = load_model_data_from_files(&model_filepaths, &shader);
                 last_modified = new_last_modified;
             }
         }
@@ -206,8 +226,14 @@ int main(int argc, char **argv) {
         EndDrawing();
     }
 
+    size_t i = 0;
+    ModelData *model = 0;
+    while ((model = modelvec_get(&models, i++)))
+        UnloadModel(model->model);
+
     modelvec_free(&models);
     stringvec_free(&model_filepaths);
+    UnloadShader(shader);
     CloseWindow();
 
     return 0;
