@@ -7,6 +7,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include "string_vector.h"
+#include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,17 +44,10 @@ static const char *vertex_shader =
 
 static Shader shader = {0};
 static Model *models = 0;
-static pthread_mutex_t lock;
 static size_t model_count = 0;
 
-typedef enum {
-    FILE_KIND_MODEL,
-    FILE_KIND_TEXTURE,
-} FileKind;
-
 void load_model(const char *filepath, uint64_t model_index) {
-    pthread_mutex_lock(&lock);
-
+    printf("mod: %s, %zu\n", filepath, model_index);
     Texture texture = {0};
     if (models[model_index].materialCount)
         texture =
@@ -67,20 +61,16 @@ void load_model(const char *filepath, uint64_t model_index) {
     models[model_index].materials[0].shader = shader;
     models[model_index].materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
         texture;
-
-    pthread_mutex_unlock(&lock);
 }
 
 void load_texture(const char *filepath, uint64_t model_index) {
-    pthread_mutex_lock(&lock);
-
+    printf("tex: %s, %zu\n", filepath, model_index);
     ImageData image_data = aseprite_load(filepath);
-    if (!image_data.base_image.data) {
-        pthread_mutex_unlock(&lock);
+    assert(image_data.base_image.data);
+    if (!image_data.base_image.data)
         return;
-    }
 
-    Texture2D texture = LoadTextureFromImage(image_data.base_image);
+    Texture texture = LoadTextureFromImage(image_data.base_image);
     UnloadImage(image_data.base_image);
     assert(texture.id);
 
@@ -97,8 +87,6 @@ void load_texture(const char *filepath, uint64_t model_index) {
         models[model_index].materials[0].maps[MATERIAL_MAP_DIFFUSE].texture =
             texture;
     }
-
-    pthread_mutex_unlock(&lock);
 }
 
 static inline void setup_models(StringVector *model_filepaths) {
@@ -112,14 +100,16 @@ static inline void setup_models(StringVector *model_filepaths) {
         if (!model_filepath)
             break;
 
-        firewatch_new_file_ex(model_filepath, 0, i, FILE_KIND_MODEL);
+        firewatch_new_file(model_filepath, i, &load_model, 0);
         load_model(model_filepath, i);
 
         char *texture_filepath =
             path_get_corresponding_texture_file(model_filepath);
         assert(texture_filepath);
-        firewatch_new_file_ex(texture_filepath, 0, i, FILE_KIND_TEXTURE);
+
+        firewatch_new_file(texture_filepath, i, &load_texture, 0);
         load_texture(texture_filepath, i);
+
         free(texture_filepath);
     }
 }
@@ -173,24 +163,11 @@ int main(int argc, char **argv) {
     };
     Camera camera = starting_camera;
 
-    LoadRequest load_request = {0};
-
     int wireframe_enabled = 0;
 
     while (!WindowShouldClose()) {
         // Check for file changes
-        while (firewatch_request_stack_pop(&load_request)) {
-            switch (load_request.kind) {
-            case FILE_KIND_MODEL:
-                load_model(load_request.filepath, load_request.cookie);
-                break;
-            case FILE_KIND_TEXTURE:
-                load_texture(load_request.filepath, load_request.cookie);
-                break;
-            default:
-                break;
-            }
-        }
+        firewatch_check();
 
         if (IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE))
             DisableCursor();
@@ -222,7 +199,9 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < model_count; i++) {
             assert(models[i].meshCount);
 
-            DrawModel(models[i], Vector3Zero(), 1.0f, RAYWHITE);
+            // DrawModel(models[i], Vector3Zero(), 1.0f, RAYWHITE);
+            DrawMesh(models[i].meshes[0], models[i].materials[0],
+                     MatrixIdentity());
             if (wireframe_enabled)
                 DrawModelWires(models[i], Vector3Zero(), 1.0f, BLACK);
         }

@@ -22,14 +22,18 @@
    are listed as includes below this comment.
 */
 
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#ifndef FIREWATCH_NO_RELOAD
 #include <assert.h>
 #include <pthread.h>
-#include <stddef.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/inotify.h>
 #include <unistd.h>
+#endif
 
 #define PATH_MAX 4096
 
@@ -37,17 +41,12 @@ typedef void (*FileRefreshFunction)(const char *file_path, uint64_t cookie);
 
 typedef struct {
     char filepath[PATH_MAX];
-    uint32_t kind;
-    uint64_t cookie;
-} LoadRequest;
-
-typedef struct {
-    LoadRequest request;
-    size_t filename_offset;
-    FileRefreshFunction on_change_callback;
     // True if updates to this file should be pushed to the updated files stack
     // instead of calling the on_change_callback.
     int using_stack;
+    size_t filename_offset;
+    uint64_t cookie;
+    FileRefreshFunction on_change_callback;
 } FileInfo;
 
 typedef struct {
@@ -60,35 +59,26 @@ typedef struct {
 //
 // `filepath`: The file to watch. Must be a file, not a directory. The parent
 // directory of the file must exist, the file itself doesn't need to.
-// Relative paths allowed.
-//
-// `on_change_callback`: A fuction pointer for a function that takes a single
-// const char pointer as argument that will be equal to `filepath` when
-// firewatch calls it.
-//
-// If `on_change_callback` is NULL, then updates to the file will be pushed to
-// an internal stack, which can be accessed using firewatch_request_stack_pop.
+// Relative paths are allowed.
 //
 // `cookie`: Any arbitrary integer that will be passed to the callback as an
-// argument (or returned as part of a LoadRequest if using the stack).
-void firewatch_new_file(const char *filepath,
+// argument.
+//
+// `on_change_callback`: A function pointer for a function that takes two
+// parameters, matching the first two parameters of this function.
+//
+// `load_instantly`: If 1, the `on_change_callback` will immediately be called
+// from a separate thread when the file changes. If for some reason the file
+// needs to be loaded from the current thread, put 0 here. In that case,
+// `on_change_callback` will be called from the current thread when the
+// firewatch_check function is called.
+void firewatch_new_file(const char *filepath, uint64_t cookie,
                         FileRefreshFunction on_change_callback,
-                        uint64_t cookie);
+                        int load_instantly);
 
-// A version of firewatch_new_file with extended option `kind`, which will be
-// some arbitrary integer that will be returned as part of a LoadRequest when
-// using the stack method instead of the callback method.
-// You can use it to differentiate between loading different kinds of files,
-// something which is was previously achieved through different callbacks with
-// the callback method.
-void firewatch_new_file_ex(const char *filepath,
-                           FileRefreshFunction on_change_callback,
-                           uint64_t cookie, uint32_t kind);
-
-// Pops one LoadRequest from the stack of newly updated files in need of a
-// reload and writes it into `out_load_request`. Returns 1 if a request was
-// successfully popped, 0 if there is no requests in the stack.
-int firewatch_request_stack_pop(LoadRequest *out_load_request);
+// Check for file change events and call callbacks if necessary (only applies to
+// when `load_instantly` of firewatch_new_file is set to 0).
+void firewatch_check(void);
 
 #endif // _FIREWATCH
 #ifdef FIREWATCH_IMPLEMENTATION
@@ -129,6 +119,8 @@ void fileinfovec_free(FileInfoVector *vec) {
 }
 
 // --- Firewatch implementation starts ---
+
+#ifndef FIREWATCH_NO_RELOAD
 
 static FileInfoVector fw_file_info_lists[FIREWATCH_MAX_DIRECTORIES];
 
@@ -176,8 +168,7 @@ static void *fw_watch_for_changes(void *_a) {
                 FileInfo *file_info =
                     fileinfovec_get(fw_file_info_lists + event->wd, j);
 
-                if (strcmp(file_info->request.filepath +
-                               file_info->filename_offset,
+                if (strcmp(file_info->filepath + file_info->filename_offset,
                            event->name))
                     continue;
 
@@ -185,8 +176,8 @@ static void *fw_watch_for_changes(void *_a) {
                 if (file_info->using_stack) {
                     fileinfovec_append(&fw_needs_refresh_queue, *file_info);
                 } else {
-                    (file_info->on_change_callback)(file_info->request.filepath,
-                                                    file_info->request.cookie);
+                    (file_info->on_change_callback)(file_info->filepath,
+                                                    file_info->cookie);
                 }
             }
 
@@ -198,7 +189,7 @@ static void *fw_watch_for_changes(void *_a) {
 }
 
 // Ensure all necassary resources have been initialized.
-static inline void fw_ensure_init(void) {
+static inline void _fw_ensure_init(void) {
     if (fw_inotify_fp <= 0)
         fw_inotify_fp = inotify_init();
 
@@ -214,24 +205,22 @@ static inline void fw_ensure_init(void) {
 
     assert((fw_inotify_fp > 0));
 }
-
-void firewatch_new_file(const char *filepath,
-                        FileRefreshFunction on_change_callback,
-                        uint64_t cookie) {
-    firewatch_new_file_ex(filepath, on_change_callback, cookie, 0);
-}
+#endif // FIREWATCH_NO_RELOAD
 
 //  TODO: Return handle, removable watch
-void firewatch_new_file_ex(const char *filepath,
-                           FileRefreshFunction on_change_callback,
-                           uint64_t cookie, uint32_t kind) {
-    fw_ensure_init();
+void firewatch_new_file(const char *filepath, uint64_t cookie,
+                        FileRefreshFunction on_change_callback,
+                        int load_instantly) {
+#ifdef FIREWATCH_NO_RELOAD
+    (*on_change_callback)(filepath, cookie);
+#else
+    _fw_ensure_init();
 
     FileInfo file_info = {.on_change_callback = on_change_callback,
-                          .using_stack = on_change_callback == 0,
-                          .request = {.cookie = cookie, .kind = kind}};
+                          .using_stack = !load_instantly,
+                          .cookie = cookie};
 
-    strncpy(file_info.request.filepath, filepath, PATH_MAX);
+    strncpy(file_info.filepath, filepath, PATH_MAX);
 
     size_t filename_start = fw_basename_start_index(filepath);
     file_info.filename_offset = filename_start;
@@ -246,11 +235,10 @@ void firewatch_new_file_ex(const char *filepath,
     int wd = inotify_add_watch(fw_inotify_fp, directory,
                                IN_CLOSE_WRITE | IN_MOVED_TO);
     if (wd <= 0) {
-        fprintf(
-            stderr,
-            "ERROR: could not begin watching file changes for file %s, maybe "
-            "the parent directory of the file does not exist?\n",
-            filepath);
+        fprintf(stderr,
+                "ERROR: could not begin watching changes on file %s, maybe "
+                "the parent directory of the file does not exist?\n",
+                filepath);
         return;
     }
 
@@ -262,25 +250,28 @@ void firewatch_new_file_ex(const char *filepath,
 
     pthread_mutex_unlock(&fw_lock);
 
-    if (!on_change_callback)
-        fileinfovec_append(&fw_needs_refresh_queue, file_info);
-    else
-        (on_change_callback)(filepath, cookie);
+    (*on_change_callback)(filepath, cookie);
+#endif
 }
 
-int firewatch_request_stack_pop(LoadRequest *out_load_request) {
+void firewatch_check(void) {
+#ifndef FIREWATCH_NO_RELOAD
     pthread_mutex_lock(&fw_lock);
 
-    if (fw_needs_refresh_queue.data_used == 0) {
-        pthread_mutex_unlock(&fw_lock);
-        return 0;
+    FileInfo *file_info = 0;
+
+    while (fw_needs_refresh_queue.data_used > 0) {
+        fw_needs_refresh_queue.data_used--;
+        file_info =
+            fw_needs_refresh_queue.data + fw_needs_refresh_queue.data_used;
+
+        assert(file_info->on_change_callback);
+
+        (file_info->on_change_callback)(file_info->filepath, file_info->cookie);
     }
 
-    *out_load_request =
-        fw_needs_refresh_queue.data[--fw_needs_refresh_queue.data_used].request;
-
     pthread_mutex_unlock(&fw_lock);
-    return 1;
+#endif
 }
 
 #endif // FIREWATCH_IMPLEMENTATION
